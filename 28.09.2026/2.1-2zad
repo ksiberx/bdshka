@@ -1,0 +1,397 @@
+USE BarbershopDB;
+GO
+
+-- 10 [хранимая процедура] Барбер, который работает в барбершопе дольше всех
+CREATE PROCEDURE sp_GetLongestWorkingBarber
+AS
+BEGIN
+    SELECT TOP 1 WITH TIES 
+        b.BarberID,
+        b.FullName,
+        b.Gender,
+        b.Phone,
+        b.Email,
+        b.BirthDate,
+        b.HireDate,
+        p.PositionName,
+        DATEDIFF(DAY, b.HireDate, GETDATE()) AS DaysWorked
+    FROM Barbers b
+    INNER JOIN Positions p ON b.PositionID = p.PositionID
+    ORDER BY b.HireDate ASC;
+END;
+GO
+
+-- Вызов 
+EXEC sp_GetLongestWorkingBarber;
+GO
+
+
+-- 11 [хранимая процедура] Барбер, обслуживший больше всех клиентов в диапазоне дат
+CREATE PROCEDURE sp_GetTopBarberByPeriod
+    @StartDate DATETIME2,
+    @EndDate DATETIME2
+AS
+BEGIN
+    SELECT TOP 1 WITH TIES 
+        b.BarberID,
+        b.FullName,
+        b.Phone,
+        p.PositionName,
+        COUNT(v.VisitID) AS ServedClientsCount
+    FROM Barbers b
+    INNER JOIN Positions p ON b.PositionID = p.PositionID
+    INNER JOIN ClientVisitsArchive v ON b.BarberID = v.BarberID
+    WHERE v.VisitDate BETWEEN @StartDate AND @EndDate
+    GROUP BY b.BarberID, b.FullName, b.Phone, p.PositionName
+    ORDER BY ServedClientsCount DESC;
+END;
+GO
+
+-- Вызов
+EXEC sp_GetTopBarberByPeriod @StartDate = '2026-01-01 00:00:00', @EndDate = '2026-12-31 23:59:59';
+GO
+
+
+-- 12 [хранимая процедура] Клиент с максимальным количеством посещений
+CREATE PROCEDURE sp_GetMostFrequentClient
+AS
+BEGIN
+    SELECT TOP 1 WITH TIES 
+        c.ClientID,
+        c.FullName,
+        c.Phone,
+        c.Email,
+        COUNT(v.VisitID) AS TotalVisits
+    FROM Clients c
+    INNER JOIN ClientVisitsArchive v ON c.ClientID = v.ClientID
+    GROUP BY c.ClientID, c.FullName, c.Phone, c.Email
+    ORDER BY TotalVisits DESC;
+END;
+GO
+
+-- Вызов 
+EXEC sp_GetMostFrequentClient;
+GO
+
+
+--  13 [хранимая процедура] Клиент, потративший больше всего денег
+CREATE PROCEDURE sp_GetHighestSpenderClient
+AS
+BEGIN
+    SELECT TOP 1 WITH TIES 
+        c.ClientID,
+        c.FullName,
+        c.Phone,
+        c.Email,
+        SUM(v.TotalPrice) AS TotalSpent
+    FROM Clients c
+    INNER JOIN ClientVisitsArchive v ON c.ClientID = v.ClientID
+    GROUP BY c.ClientID, c.FullName, c.Phone, c.Email
+    ORDER BY TotalSpent DESC;
+END;
+GO
+
+-- Вызов 
+EXEC sp_GetHighestSpenderClient;
+GO
+
+
+--  14 [хранимая процедура] Самая длинная по времени услуга
+CREATE PROCEDURE sp_GetLongestService
+AS
+BEGIN
+    SELECT TOP 1 WITH TIES 
+        ServiceID,
+        ServiceName,
+        Price,
+        DurationMinutes
+    FROM Services
+    ORDER BY DurationMinutes DESC;
+END;
+GO
+
+-- Вызов
+EXEC sp_GetLongestService;
+GO
+
+
+-- 15 [хранимая процедура] Самый популярный барбер (по количеству клиентов)
+CREATE PROCEDURE sp_GetMostPopularBarber
+AS
+BEGIN
+    SELECT TOP 1 WITH TIES 
+        b.BarberID,
+        b.FullName,
+        b.Phone,
+        p.PositionName,
+        COUNT(v.VisitID) AS TotalClientsServed
+    FROM Barbers b
+    INNER JOIN Positions p ON b.PositionID = p.PositionID
+    INNER JOIN ClientVisitsArchive v ON b.BarberID = v.BarberID
+    GROUP BY b.BarberID, b.FullName, b.Phone, p.PositionName
+    ORDER BY TotalClientsServed DESC;
+END;
+GO
+
+-- Вызов
+EXEC sp_GetMostPopularBarber;
+GO
+
+
+-- 16 [хранимая процедура] Топ-3 барберов за месяц (по выручке)
+CREATE PROCEDURE sp_GetTop3BarbersByMonthlyRevenue
+    @TargetMonth INT,
+    @TargetYear INT
+AS
+BEGIN
+    SELECT TOP 3 
+        b.BarberID,
+        b.FullName,
+        b.Phone,
+        p.PositionName,
+        SUM(v.TotalPrice) AS MonthlyRevenue
+    FROM Barbers b
+    INNER JOIN Positions p ON b.PositionID = p.PositionID
+    INNER JOIN ClientVisitsArchive v ON b.BarberID = v.BarberID
+    WHERE MONTH(v.VisitDate) = @TargetMonth 
+      AND YEAR(v.VisitDate) = @TargetYear
+    GROUP BY b.BarberID, b.FullName, b.Phone, p.PositionName
+    ORDER BY MonthlyRevenue DESC;
+END;
+GO
+
+-- Вызов 
+EXEC sp_GetTop3BarbersByMonthlyRevenue @TargetMonth = 10, @TargetYear = 2026;
+GO
+
+
+-- 17 [хранимая процедура] Топ-3 барберов за всё время по средней оценке (визитов >= 30)
+CREATE PROCEDURE sp_GetTop3BarbersByRating
+AS
+BEGIN
+    WITH RatedVisits AS (
+        SELECT 
+            BarberID,
+            CASE Rating
+                WHEN N'Очень плохо' THEN 1.0
+                WHEN N'Плохо' THEN 2.0
+                WHEN N'Нормально' THEN 3.0
+                WHEN N'Хорошо' THEN 4.0
+                WHEN N'Великолепно' THEN 5.0
+            END AS NumericRating
+        FROM ClientVisitsArchive
+        WHERE Rating IS NOT NULL
+    )
+    SELECT TOP 3 
+        b.BarberID,
+        b.FullName,
+        p.PositionName,
+        COUNT(rv.NumericRating) AS TotalRatedVisits,
+        AVG(rv.NumericRating) AS AverageRating
+    FROM Barbers b
+    INNER JOIN Positions p ON b.PositionID = p.PositionID
+    INNER JOIN RatedVisits rv ON b.BarberID = rv.BarberID
+    GROUP BY b.BarberID, b.FullName, p.PositionName
+    HAVING COUNT(rv.NumericRating) >= 30
+    ORDER BY AverageRating DESC;
+END;
+GO
+
+-- Вызов
+EXEC sp_GetTop3BarbersByRating;
+GO
+
+
+-- 18 [хранимая процедура] Расписание на день конкретного барбера
+CREATE PROCEDURE sp_GetBarberDailySchedule
+    @BarberID INT,
+    @TargetDate DATE
+AS
+BEGIN
+    SELECT 
+        s.ScheduleID,
+        s.StartTime,
+        s.EndTime,
+        s.IsAvailable,
+        c.FullName AS ClientName,
+        c.Phone AS ClientPhone
+    FROM Schedules s
+    LEFT JOIN Clients c ON s.ClientID = c.ClientID
+    WHERE s.BarberID = @BarberID 
+      AND CAST(s.StartTime AS DATE) = @TargetDate
+    ORDER BY s.StartTime ASC;
+END;
+GO
+
+-- Вызов
+EXEC sp_GetBarberDailySchedule @BarberID = 1, @TargetDate = '2026-10-01';
+GO
+
+
+-- 19 [хранимая процедура] Свободные слоты на неделю конкретного барбера
+CREATE PROCEDURE sp_GetBarberWeeklyFreeSlots
+    @BarberID INT,
+    @StartDate DATE
+AS
+BEGIN
+    DECLARE @EndDate DATE = DATEADD(DAY, 7, @StartDate);
+
+    SELECT 
+        s.ScheduleID,
+        s.StartTime,
+        s.EndTime
+    FROM Schedules s
+    WHERE s.BarberID = @BarberID 
+      AND s.IsAvailable = 1
+      AND s.StartTime >= @StartDate 
+      AND s.StartTime < @EndDate
+    ORDER BY s.StartTime ASC;
+END;
+GO
+
+-- Вызов 
+EXEC sp_GetBarberWeeklyFreeSlots @BarberID = 1, @StartDate = '2026-10-01';
+GO
+
+
+-- 20 [хранимая процедура] Перенос завершенных услуг в архив
+CREATE PROCEDURE sp_ArchiveCompletedAppointments
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    INSERT INTO ClientVisitsArchive (ClientID, BarberID, VisitDate, TotalPrice)
+    SELECT 
+        s.ClientID,
+        s.BarberID,
+        s.EndTime,
+        0.00
+    FROM Schedules s
+    WHERE s.EndTime < GETDATE() 
+      AND s.IsAvailable = 0 
+      AND s.ClientID IS NOT NULL;
+
+    DELETE FROM Schedules
+    WHERE EndTime < GETDATE();
+END;
+GO
+
+-- 21 [триггер]: Запрет записи на уже занятое время
+CREATE TRIGGER trg_PreventDoubleBooking
+ON Schedules
+INSTEAD OF INSERT, UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF EXISTS (
+        SELECT 1 
+        FROM inserted i
+        INNER JOIN Schedules s ON i.BarberID = s.BarberID
+        WHERE s.ScheduleID <> ISNULL(i.ScheduleID, 0)
+          AND i.StartTime < s.EndTime 
+          AND i.EndTime > s.StartTime
+    )
+    BEGIN
+        RAISERROR (N'Ошибка: Барбер уже занят на это время и дату!', 16, 1);
+        RETURN;
+    END;
+
+    INSERT INTO Schedules (BarberID, StartTime, EndTime, ClientID, IsAvailable)
+    SELECT BarberID, StartTime, EndTime, ClientID, IsAvailable
+    FROM inserted
+    WHERE ScheduleID NOT IN (SELECT ScheduleID FROM Schedules);
+
+    UPDATE s
+    SET 
+        s.BarberID = i.BarberID,
+        s.StartTime = i.StartTime,
+        s.EndTime = i.EndTime,
+        s.ClientID = i.ClientID,
+        s.IsAvailable = i.IsAvailable
+    FROM Schedules s
+    INNER JOIN inserted i ON s.ScheduleID = i.ScheduleID;
+END;
+GO
+
+-- тест
+INSERT INTO Schedules (BarberID, StartTime, EndTime, ClientID, IsAvailable)
+VALUES (1, '2026-10-01 10:00:00', '2026-10-01 11:00:00', 2, 0);
+GO
+
+
+-- 22 [тригер] Запрет добавления джуниор-барбера, если их уже 5
+CREATE TRIGGER trg_LimitJuniorBarbersCount
+ON Barbers
+AFTER INSERT, UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @JuniorCount INT;
+
+    SELECT @JuniorCount = COUNT(*)
+    FROM Barbers b
+    INNER JOIN Positions p ON b.PositionID = p.PositionID
+    WHERE p.PositionName = N'Джуниор-барбер';
+
+    IF @JuniorCount > 5
+    BEGIN
+        RAISERROR (N'Ошибка: Достигнут лимит! В салоне не может работать более 5 джуниор-барберов.', 16, 1);
+        ROLLBACK TRANSACTION;
+        RETURN;
+    END;
+END;
+GO
+
+-- тест
+INSERT INTO Barbers (FullName, Gender, Phone, Email, BirthDate, HireDate, PositionID)
+VALUES (N'Тестовый Джуниор', 'M', '+7 (999) 000-00-99', 'test@barber.ru', '2000-01-01', GETDATE(), 3);
+GO
+
+
+-- 23 [хранимая процедура] Клиенты без фидбека и оценок
+CREATE PROCEDURE sp_GetClientsWithoutFeedbackAndRating
+AS
+BEGIN
+    SELECT DISTINCT 
+        c.ClientID,
+        c.FullName,
+        c.Phone,
+        c.Email
+    FROM Clients c
+    INNER JOIN ClientVisitsArchive v ON c.ClientID = v.ClientID
+    WHERE c.ClientID NOT IN (
+        SELECT ClientID 
+        FROM ClientVisitsArchive 
+        WHERE Feedback IS NOT NULL OR Rating IS NOT NULL
+    );
+END;
+GO
+
+-- Вызов
+EXEC sp_GetClientsWithoutFeedbackAndRating;
+GO
+
+
+-- 24 [хранимая процедура Клиенты, не посещавшие салон свыше одного года
+CREATE PROCEDURE sp_GetClientsInactiveOverOneYear
+AS
+BEGIN
+    SELECT 
+        c.ClientID,
+        c.FullName,
+        c.Phone,
+        c.Email,
+        MAX(v.VisitDate) AS LastVisitDate
+    FROM Clients c
+    LEFT JOIN ClientVisitsArchive v ON c.ClientID = v.ClientID
+    GROUP BY c.ClientID, c.FullName, c.Phone, c.Email
+    HAVING MAX(v.VisitDate) < DATEADD(YEAR, -1, GETDATE()) 
+        OR MAX(v.VisitDate) IS NULL;
+END;
+GO
+
+-- Вызов
+EXEC sp_GetClientsInactiveOverOneYear;
+GO
