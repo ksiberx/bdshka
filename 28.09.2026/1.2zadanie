@@ -1,0 +1,217 @@
+USE BarbershopDB;
+GO
+
+-- 1. процедура
+-- 1. Вернуть ФИО всех барберов салона
+CREATE PROCEDURE sp_GetAllBarbersFullName
+AS
+BEGIN
+    SELECT FullName 
+    FROM Barbers;
+END;
+GO
+
+EXEC sp_GetAllBarbersFullName;
+GO
+
+-- 2. процедура
+-- 2. Вернуть информацию о всех синьор-барберах
+CREATE PROCEDURE sp_GetSeniorBarbers
+AS
+BEGIN
+    SELECT 
+        b.BarberID,
+        b.FullName,
+        b.Gender,
+        b.Phone,
+        b.Email,
+        b.BirthDate,
+        b.HireDate,
+        p.PositionName
+    FROM Barbers b
+    INNER JOIN Positions p ON b.PositionID = p.PositionID
+    WHERE p.PositionName = N'Синьор-барбер';
+END;
+GO
+
+EXEC sp_GetSeniorBarbers;
+GO
+
+-- 3. Процедура
+-- 3. Вернуть информацию о всех барберах, которые могут предоставить услугу традиционного бритья бороды
+CREATE PROCEDURE sp_GetBarbersForTraditionalShave
+AS
+BEGIN
+    SELECT DISTINCT 
+        b.BarberID,
+        b.FullName,
+        b.Phone,
+        b.Email,
+        p.PositionName
+    FROM Barbers b
+    INNER JOIN Positions p ON b.PositionID = p.PositionID
+    INNER JOIN BarberServices bs ON b.BarberID = bs.BarberID
+    INNER JOIN Services s ON bs.ServiceID = s.ServiceID
+    WHERE s.ServiceName = N'Традиционное бритье бороды';
+END;
+GO
+
+EXEC sp_GetBarbersForTraditionalShave;
+GO
+
+-- 4. процедура
+-- 4. Вернуть информацию о всех барберах, которые могут предоставить конкретную услугу. 
+CREATE PROCEDURE sp_GetBarbersByServiceName
+    @ServiceName NVARCHAR(100)
+AS
+BEGIN
+    SELECT DISTINCT 
+        b.BarberID,
+        b.FullName,
+        b.Phone,
+        b.Email,
+        p.PositionName
+    FROM Barbers b
+    INNER JOIN Positions p ON b.PositionID = p.PositionID
+    INNER JOIN BarberServices bs ON b.BarberID = bs.BarberID
+    INNER JOIN Services s ON bs.ServiceID = s.ServiceID
+    WHERE s.ServiceName = @ServiceName;
+END;
+GO
+
+EXEC sp_GetBarbersByServiceName @ServiceName = N'Мужская стрижка';
+GO
+
+-- 5. процедура
+-- 5. Вернуть информацию о всех барберах, которые работают свыше указанного количества лет.
+
+CREATE PROCEDURE sp_GetBarbersByExperienceYears
+    @Years INT
+AS
+BEGIN
+    SELECT 
+        b.BarberID,
+        b.FullName,
+        b.Phone,
+        b.HireDate,
+        DATEDIFF(YEAR, b.HireDate, GETDATE()) AS ExperienceYears
+    FROM Barbers b
+    WHERE DATEDIFF(YEAR, b.HireDate, GETDATE()) > @Years;
+END;
+GO
+
+EXEC sp_GetBarbersByExperienceYears @Years = 3;
+GO
+
+-- 6. процедура
+-- 6. Вернуть количество синьор-барберов и количество джуниор-барберов
+CREATE PROCEDURE sp_GetSeniorAndJuniorCount
+AS
+BEGIN
+    SELECT 
+        SUM(CASE WHEN p.PositionName = N'Синьор-барбер' THEN 1 ELSE 0 END) AS SeniorBarbersCount,
+        SUM(CASE WHEN p.PositionName = N'Джуниор-барбер' THEN 1 ELSE 0 END) AS JuniorBarbersCount
+    FROM Barbers b
+    INNER JOIN Positions p ON b.PositionID = p.PositionID;
+END;
+GO
+
+EXEC sp_GetSeniorAndJuniorCount;
+GO
+
+-- 7. пользовательская табличная функция
+-- 7. Вернуть информацию о постоянных клиентах. 
+CREATE FUNCTION fn_GetRegularClients
+(
+    @MinVisits INT
+)
+RETURNS TABLE
+AS
+RETURN
+(
+    SELECT 
+        c.ClientID,
+        c.FullName,
+        c.Phone,
+        c.Email,
+        COUNT(v.VisitID) AS TotalVisits
+    FROM Clients c
+    INNER JOIN ClientVisitsArchive v ON c.ClientID = v.ClientID
+    GROUP BY c.ClientID, c.FullName, c.Phone, c.Email
+    HAVING COUNT(v.VisitID) >= @MinVisits
+);
+GO
+
+SELECT * FROM dbo.fn_GetRegularClients(3);
+GO
+
+-- 8. триггер (INSTEAD OF DELETE)
+-- 8. Запретить возможность удаления информации о чиф-барбере, если не добавлен второй чиф-барбер
+CREATE TRIGGER trg_PreventChiefBarberDelete
+ON Barbers
+INSTEAD OF DELETE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF EXISTS (
+        SELECT 1 
+        FROM deleted d
+        INNER JOIN Positions p ON d.PositionID = p.PositionID
+        WHERE p.PositionName = N'Чиф-барбер'
+    )
+    BEGIN
+        DECLARE @RemainingChiefs INT;
+        
+        SELECT @RemainingChiefs = COUNT(*)
+        FROM Barbers b
+        INNER JOIN Positions p ON b.PositionID = p.PositionID
+        WHERE p.PositionName = N'Чиф-барбер' 
+          AND b.BarberID NOT IN (SELECT BarberID FROM deleted);
+
+        IF @RemainingChiefs < 1
+        BEGIN
+            RAISERROR (N'Ошибка: Нельзя удалить единственного чиф-барбера, пока не добавлен другой!', 16, 1);
+            RETURN;
+        END;
+    END;
+
+    DELETE FROM Barbers 
+    WHERE BarberID IN (SELECT BarberID FROM deleted);
+END;
+GO
+
+DELETE FROM Barbers WHERE BarberID = 1;
+GO
+
+-- 9. триггер (AFTER INSERT, UPDATE)
+-- 9. Запретить добавлять барберов младше 21 года
+CREATE TRIGGER trg_PreventBarberUnder21
+ON Barbers
+AFTER INSERT, UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF EXISTS (
+        SELECT 1 
+        FROM inserted 
+        WHERE DATEDIFF(YEAR, BirthDate, GETDATE()) - 
+              CASE 
+                  WHEN DATEADD(YEAR, DATEDIFF(YEAR, BirthDate, GETDATE()), BirthDate) > GETDATE() 
+                  THEN 1 
+                  ELSE 0 
+              END < 21
+    )
+    BEGIN
+        RAISERROR (N'Ошибка: Возраст барбера не может быть меньше 21 года!', 16, 1);
+        ROLLBACK TRANSACTION;
+        RETURN;
+    END;
+END;
+GO
+
+
+INSERT INTO Barbers (FullName, Gender, Phone, Email, BirthDate, HireDate, PositionID)
+VALUES (N'Тестов Тест Тестович', 'M', '+7 (999) 000-00-00', 'test@test.ru', '2008-01-01', GETDATE(), 3);
+GO
